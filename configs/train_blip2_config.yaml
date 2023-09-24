@@ -1,0 +1,36 @@
+# path to the image root folder containing multiple image folders: images1/, images2/ etc.
+data_path: /Experements/Imaginova/sergey_blip_dataset_creation
+
+# one or more (comma separated) .csv files, containing columns <paths> and <captions>
+csv_list: 
+    - /Experements/Imaginova/sergey_blip_dataset_creation/images1.csv
+    - /Experements/Imaginova/sergey_blip_dataset_creation/images2.csv
+
+# image crop box
+crop_box: [0, 0, 1024, 1024]
+
+#model params
+model:
+    pretrained: "blip2-opt-2.7b"
+    
+peft:
+    lora:
+        r: 16
+        lora_alpha: 32
+        lora_dropout: 0.05
+        target_modules: ["q_proj", "k_proj"]
+
+# training params
+training:
+    learning_rate: 5.0e-4
+    n_epochs: 10
+    batch_size: 2
+    
+# GPU to use
+gpu: 1
+
+# W&B params
+wandb:
+    enabled: true
+    project: "BLIP2_FINETUNE"
+    
