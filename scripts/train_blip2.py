@@ -1,5 +1,5 @@
+import os
 import pandas
-import argparse
 from tqdm import tqdm
 from PIL import Image
 
@@ -10,7 +10,8 @@ from peft import LoraConfig, get_peft_model
 
 import hydra
 import wandb
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf
+
 
 class ImageCaptioningDataset(Dataset):
     def __init__(self, images_root, csvs_list, processor, crop_box):
@@ -39,9 +40,11 @@ class ImageCaptioningDataset(Dataset):
             raise
         
         encoding = self.processor(images=image, padding="max_length", return_tensors="pt")
+        encoding = {k: v.squeeze() for k, v in encoding.items()}
         encoding["prompt"] = caption
         
         return encoding
+
 
 def make_collate_fn(processor):
     def collate_fn(batch):
@@ -60,6 +63,7 @@ def make_collate_fn(processor):
 
     return collate_fn
 
+
 def build_model(pretrained, lora_config):
     processor = AutoProcessor.from_pretrained(pretrained)
     model = Blip2ForConditionalGeneration.from_pretrained(pretrained, device_map="auto")
@@ -69,31 +73,41 @@ def build_model(pretrained, lora_config):
     
     return model, processor
 
-def make_dataloader(images_root_folder, csvs, processor, batch_size, crop_box):
+
+def make_dataloader(processor, config):
     
-    train_dataset = ImageCaptioningDataset(images_root_folder, csvs, processor, crop_box=crop_box)
+    train_dataset = ImageCaptioningDataset(images_root=config.data_path,
+                                           csvs_list=config.csv_list,
+                                           processor=processor,
+                                           crop_box=tuple(config.crop_box))
+    
     collate_fn = make_collate_fn(processor)
-    train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=2)
+    train_dataloader = DataLoader(train_dataset,
+                                  shuffle=True,
+                                  batch_size=config.training.batch_size,
+                                  collate_fn=collate_fn)
     
     return train_dataloader
+
+
+def train_model(model, train_dataloader, config):
     
-def train_model(model, train_dataloader, learning_rate, n_epochs, wandb_log=False):
-    optimizer = torch.optim.Adam(model.parameters(), lr=5e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.training.learning_rate)
     
     model.train()
     
-    device = "cuda:0"
-    for epoch in range(n_epochs):
+    device = f"cuda:{config.gpu}"
+    for epoch in range(config.training.n_epochs):
         print("Epoch:", epoch)
         progress_bar = tqdm(train_dataloader, desc="Training", leave=True)
         for idx, x in enumerate(progress_bar):
          
-            outputs = model(input_ids=x[1].to(device),
-                            pixel_values=x[0].to(device),
-                            labels=x[1].to(device))
+            outputs = model(input_ids=x['input_ids'].to(device),
+                            pixel_values=x['pixel_values'].to(device),
+                            labels=x['input_ids'].to(device))
             
             loss = outputs.loss
-            if wandb_log:
+            if config.wandb.enabled:
                 wandb.log({"loss": loss.item()})
                 
             progress_bar.set_postfix({'loss': loss.item()})
@@ -102,22 +116,24 @@ def train_model(model, train_dataloader, learning_rate, n_epochs, wandb_log=Fals
         optimizer.step()
         optimizer.zero_grad()
 
+        
 @hydra.main(version_base=None, config_path="../configs", config_name="train_blip2_config")
 def main(cfg):
     
     if cfg.wandb:
-        wandb.config = omegaconf.OmegaConf.to_container(
+        wandb.config = OmegaConf.to_container(
             cfg, resolve=True, throw_on_missing=True
         )
         
         wandb.init(project=cfg.wandb.project)
+
         
     lora_config = LoraConfig(
         r=cfg.peft.lora.r,
         lora_alpha=cfg.peft.lora.lora_alpha,
         lora_dropout=cfg.peft.lora.lora_dropout,
-        bias="none",
-        target_modules=cfg.peft.target_modules
+        bias=cfg.peft.lora.bias,
+        target_modules=list(cfg.peft.lora.target_modules)
     )
 
     model, processor = build_model(pretrained=cfg.model.pretrained,
@@ -125,18 +141,19 @@ def main(cfg):
                                   )
     
     
-    train_dataloader = make_dataloader(images_root_folder=cfg.data_path,
-                                     csvs=cfg.csv_list,
-                                     processor=processor,
-                                     batch_size=cfg.training.batch_size,
-                                     crop_box=tuple(cfg.crop_box)
+    train_dataloader = make_dataloader(processor=processor,
+                                       config=cfg
                                      )
     
     train_model(model=model,
-               learning_rate=cfg.training.learning_rate,
-               n_epochs=cfg.training.n_epochs,
-               wandb_log=cfg.wandb
+               train_dataloader=train_dataloader,
+               config=cfg
                )
+    
+    peft_checkpoint_path = os.path.join(cfg.peft.checkpoint_root, f"{wandb.run.id}_{wandb.run.name}")
+    os.mkdir(peft_checkpoint_path)
+    model.save_pretrained(peft_checkpoint_path)
+    print(f'Adapter model saved to {peft_checkpoint_path}.')
 
 
 if __name__ == '__main__':
