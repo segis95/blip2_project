@@ -9,12 +9,11 @@ from transformers import AutoProcessor, Blip2ForConditionalGeneration
 from peft import LoraConfig, get_peft_model
 
 import hydra
-import wandb
 from omegaconf import OmegaConf
 
 
 class ImageCaptioningDataset(Dataset):
-    def __init__(self, images_root, csvs_list, processor, crop_box):
+    def __init__(self, images_root, csvs_list, processor, crop_box=None):
 
         self.crop_box = crop_box
         self.img_path_caption_pairs = []
@@ -35,7 +34,11 @@ class ImageCaptioningDataset(Dataset):
         img_path, caption = self.img_path_caption_pairs[idx]
         
         try:
-            image = Image.open(img_path).crop(box=self.crop_box)
+            image = Image.open(img_path)
+            
+            if self.crop_box is not None:
+                image = image.crop(box=self.crop_box)
+                
         except Exception as exc:
             raise
         
@@ -96,6 +99,9 @@ def train_model(model, train_dataloader, config):
     
     model.train()
     
+    peft_checkpoint_path = os.path.join(config.peft.checkpoint_root, f"{wandb.run.id}_{wandb.run.name}")
+    os.mkdir(peft_checkpoint_path)
+    
     device = f"cuda:{config.gpu}"
     for epoch in range(config.training.n_epochs):
         print("Epoch:", epoch)
@@ -115,12 +121,17 @@ def train_model(model, train_dataloader, config):
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
+        
+        epoch_saving_path = os.path.join(peft_checkpoint_path, f'epoch_{epoch}')
+        os.mkdir(epoch_saving_path)
+        model.save_pretrained(epoch_saving_path)
 
         
 @hydra.main(version_base=None, config_path="../configs", config_name="train_blip2_config")
 def main(cfg):
     
-    if cfg.wandb:
+    if cfg.wandb.enabled:
+        import wandb
         wandb.config = OmegaConf.to_container(
             cfg, resolve=True, throw_on_missing=True
         )
@@ -135,10 +146,11 @@ def main(cfg):
         bias=cfg.peft.lora.bias,
         target_modules=list(cfg.peft.lora.target_modules)
     )
-
-    model, processor = build_model(pretrained=cfg.model.pretrained,
-                                  lora_config=lora_config
-                                  )
+    
+    with torch.device.cuda(cfg.gpu):
+        model, processor = build_model(pretrained=cfg.model.pretrained,
+                                      lora_config=lora_config
+                                      )
     
     
     train_dataloader = make_dataloader(processor=processor,
@@ -149,11 +161,6 @@ def main(cfg):
                train_dataloader=train_dataloader,
                config=cfg
                )
-    
-    peft_checkpoint_path = os.path.join(cfg.peft.checkpoint_root, f"{wandb.run.id}_{wandb.run.name}")
-    os.mkdir(peft_checkpoint_path)
-    model.save_pretrained(peft_checkpoint_path)
-    print(f'Adapter model saved to {peft_checkpoint_path}.')
 
 
 if __name__ == '__main__':

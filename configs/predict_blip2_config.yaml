@@ -1,0 +1,21 @@
+image_folders_list:
+    - /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/images1_infer
+    - /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/images2_infer
+
+base_model_checkpoint: "blip2-opt-2.7b"
+
+peft_checkpoint: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/peft_checkpoints/ppxy9wbw_peach-wood-23/epoch_2
+
+resulting_csv: 
+    directory: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/
+    base_name: "BLIP2_INFERENCE_RESULTS.csv"
+
+# GPU id relative to CUDA_VISIBLE_DEVICES value
+gpu: 0
+
+wandb:
+    enabled: True
+    project: "BLIP2_PREDICT"
+    log_visual_examples: True
+    n_logged_visual_examples: 60
+    img_loging_shape: [128, 128]
