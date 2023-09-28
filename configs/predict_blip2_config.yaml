@@ -13,6 +13,7 @@ resulting_csv:
 # GPU id relative to CUDA_VISIBLE_DEVICES value
 gpu: 0
 
+
 wandb:
     enabled: True
     project: "BLIP2_PREDICT"
