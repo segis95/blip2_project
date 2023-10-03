@@ -1,5 +1,6 @@
 # path to the image root folder containing multiple image folders: images1/, images2/ etc.
 data_path: /app/alexw/Experements/Imaginova
+# /app/alexw/Experements/Imaginova
 # /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation
 #
 # one or more (comma separated) .csv files, containing columns <paths> and <captions>
@@ -30,11 +31,8 @@ peft:
 # training params
 training:
     learning_rate: 5.0e-4
-    n_epochs: 5
-    batch_size: 2
-    
-# GPU id relative to CUDA_VISIBLE_DEVICES value
-gpu: 0
+    n_epochs: 10
+    batch_size: 1
 
 # W&B params
 wandb:

@@ -33,7 +33,6 @@ def make_csv_and_save(paths, captions, config):
 def main(cfg):
     
     if cfg.wandb.enabled:
-        import wandb
         wandb.config = OmegaConf.to_container(
             cfg, resolve=True, throw_on_missing=True
         )

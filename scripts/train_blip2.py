@@ -7,6 +7,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoProcessor, Blip2ForConditionalGeneration
 from peft import LoraConfig, get_peft_model
+from accelerate import Accelerator
 
 import hydra
 from omegaconf import OmegaConf
@@ -69,7 +70,7 @@ def make_collate_fn(processor):
 
 def build_model(pretrained, lora_config):
     processor = AutoProcessor.from_pretrained(pretrained)
-    model = Blip2ForConditionalGeneration.from_pretrained(pretrained, device_map="auto")
+    model = Blip2ForConditionalGeneration.from_pretrained(pretrained)#, device_map="auto"
 
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
@@ -99,46 +100,63 @@ def train_model(model, train_dataloader, config):
     
     model.train()
     
-    peft_checkpoint_path = os.path.join(config.peft.checkpoint_root, f"{wandb.run.id}_{wandb.run.name}")
-    os.mkdir(peft_checkpoint_path)
+    if config.wandb.enabled:
+        accelerator = Accelerator(log_with="wandb")
+        
+        accelerator.init_trackers(
+            project_name=config.wandb.project, 
+            config=OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
+        )
+        
+        wandb_tracker = accelerator.get_tracker("wandb", unwrap=True)
+        if accelerator.is_main_process:
+            
+            peft_checkpoint_path = os.path.join(
+                                config.peft.checkpoint_root,
+                                f"{wandb_tracker.id}_{wandb_tracker.name}")
+            
+            os.makedirs(peft_checkpoint_path, exist_ok=True)
+        
+    else:
+        accelerator = Accelerator()
+        peft_checkpoint_path = os.path.join(config.peft.checkpoint_root, "TEST")
+        os.makedirs(peft_checkpoint_path, exist_ok=True)
+        
     
-    device = f"cuda:{config.gpu}"
+    model, optimizer, train_dataloader = accelerator.prepare(
+        model, optimizer, train_dataloader
+    )
+    
     for epoch in range(config.training.n_epochs):
         print("Epoch:", epoch)
         progress_bar = tqdm(train_dataloader, desc="Training", leave=True)
         for idx, x in enumerate(progress_bar):
          
-            outputs = model(input_ids=x['input_ids'].to(device),
-                            pixel_values=x['pixel_values'].to(device),
-                            labels=x['input_ids'].to(device))
+            outputs = model(input_ids=x['input_ids'],
+                            pixel_values=x['pixel_values'],
+                            labels=x['input_ids'])
             
             loss = outputs.loss
             if config.wandb.enabled:
-                wandb.log({"loss": loss.item()})
+                accelerator.log({"loss": loss.item()})
                 
             progress_bar.set_postfix({'loss': loss.item()})
         
-        loss.backward()
+        accelerator.backward(loss)
         optimizer.step()
         optimizer.zero_grad()
         
-        epoch_saving_path = os.path.join(peft_checkpoint_path, f'epoch_{epoch}')
-        os.mkdir(epoch_saving_path)
-        model.save_pretrained(epoch_saving_path)
+        if accelerator.is_main_process:
+            epoch_saving_path = os.path.join(peft_checkpoint_path, f'epoch_{epoch}')
+            os.makedirs(epoch_saving_path, exist_ok=True)
+            accelerator.unwrap_model(model).save_pretrained(epoch_saving_path)
+    
+    accelerator.end_training()
 
         
 @hydra.main(version_base=None, config_path="../configs", config_name="train_blip2_config")
 def main(cfg):
     
-    if cfg.wandb.enabled:
-        import wandb
-        wandb.config = OmegaConf.to_container(
-            cfg, resolve=True, throw_on_missing=True
-        )
-        
-        wandb.init(project=cfg.wandb.project)
-
-        
     lora_config = LoraConfig(
         r=cfg.peft.lora.r,
         lora_alpha=cfg.peft.lora.lora_alpha,
@@ -147,10 +165,10 @@ def main(cfg):
         target_modules=list(cfg.peft.lora.target_modules)
     )
     
-    with torch.device.cuda(cfg.gpu):
-        model, processor = build_model(pretrained=cfg.model.pretrained,
-                                      lora_config=lora_config
-                                      )
+
+    model, processor = build_model(pretrained=cfg.model.pretrained,
+                                  lora_config=lora_config
+                                  )
     
     
     train_dataloader = make_dataloader(processor=processor,
