@@ -73,6 +73,8 @@ def build_model(pretrained, lora_config):
     model = Blip2ForConditionalGeneration.from_pretrained(pretrained)#, device_map="auto"
 
     model = get_peft_model(model, lora_config)
+    model.train()
+    
     model.print_trainable_parameters()
     
     return model, processor
@@ -93,14 +95,9 @@ def make_dataloader(processor, config):
     
     return train_dataloader
 
-
-def train_model(model, train_dataloader, config):
+def make_accelerator(config):
     
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.training.learning_rate)
-    
-    model.train()
-    
-    if config.wandb.enabled:
+     if config.wandb.enabled:
         accelerator = Accelerator(log_with="wandb")
         
         accelerator.init_trackers(
@@ -109,27 +106,29 @@ def train_model(model, train_dataloader, config):
         )
         
         wandb_tracker = accelerator.get_tracker("wandb", unwrap=True)
-        if accelerator.is_main_process:
-            
-            peft_checkpoint_path = os.path.join(
-                                config.peft.checkpoint_root,
-                                f"{wandb_tracker.id}_{wandb_tracker.name}")
-            
-            os.makedirs(peft_checkpoint_path, exist_ok=True)
         
+        peft_checkpoint_path = os.path.join(
+                                config.peft.checkpoint_root,
+                                f"{wandb_tracker.id}_{wandb_tracker.name}") 
     else:
         accelerator = Accelerator()
-        peft_checkpoint_path = os.path.join(config.peft.checkpoint_root, "TEST")
+        if accelerator.is_main_process:
+            peft_checkpoint_path = os.path.join(config.peft.checkpoint_root, "TEST")
+            
+      
+    if accelerator.is_main_process:
         os.makedirs(peft_checkpoint_path, exist_ok=True)
         
+    return accelerator
     
-    model, optimizer, train_dataloader = accelerator.prepare(
-        model, optimizer, train_dataloader
-    )
+
+def train_model(accelerator, model, optimizer, train_dataloader, config):
     
     for epoch in range(config.training.n_epochs):
         print("Epoch:", epoch)
-        progress_bar = tqdm(train_dataloader, desc="Training", leave=True)
+        progress_bar = tqdm(train_dataloader, desc="Training", leave=True,
+                            disable=not accelerator.is_main_process)
+        
         for idx, x in enumerate(progress_bar):
          
             outputs = model(input_ids=x['input_ids'],
@@ -152,7 +151,6 @@ def train_model(model, train_dataloader, config):
             accelerator.unwrap_model(model).save_pretrained(epoch_saving_path)
     
     accelerator.end_training()
-
         
 @hydra.main(version_base=None, config_path="../configs", config_name="train_blip2_config")
 def main(cfg):
@@ -170,12 +168,21 @@ def main(cfg):
                                   lora_config=lora_config
                                   )
     
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.training.learning_rate)
     
     train_dataloader = make_dataloader(processor=processor,
                                        config=cfg
                                      )
     
-    train_model(model=model,
+    
+    accelerator = make_accelerator(cfg)
+    model, optimizer, train_dataloader = accelerator.prepare(
+        model, optimizer, train_dataloader
+    )
+    
+    train_model(accelerator=accelerator,
+               model=model,
+               optimizer=optimizer,
                train_dataloader=train_dataloader,
                config=cfg
                )

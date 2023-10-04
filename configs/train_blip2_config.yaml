@@ -30,9 +30,9 @@ peft:
 
 # training params
 training:
-    learning_rate: 5.0e-4
+    learning_rate: 5.0e-5
     n_epochs: 10
-    batch_size: 1
+    batch_size: 2
 
 # W&B params
 wandb:
