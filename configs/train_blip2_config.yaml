@@ -20,6 +20,8 @@ model:
     
 peft:
     checkpoint_root: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/peft_checkpoints
+    # updated during training
+    checkpoint_path:
     lora:
         r: 16
         lora_alpha: 32
@@ -32,7 +34,7 @@ peft:
 training:
     learning_rate: 5.0e-5
     n_epochs: 10
-    batch_size: 2
+    batch_size: 1
 
 # W&B params
 wandb:

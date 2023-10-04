@@ -70,7 +70,7 @@ def make_collate_fn(processor):
 
 def build_model(pretrained, lora_config):
     processor = AutoProcessor.from_pretrained(pretrained)
-    model = Blip2ForConditionalGeneration.from_pretrained(pretrained)#, device_map="auto"
+    model = Blip2ForConditionalGeneration.from_pretrained(pretrained, device_map="cpu")#, device_map="auto"
 
     model = get_peft_model(model, lora_config)
     model.train()
@@ -97,27 +97,28 @@ def make_dataloader(processor, config):
 
 def make_accelerator(config):
     
-     if config.wandb.enabled:
+    if config.wandb.enabled:
         accelerator = Accelerator(log_with="wandb")
-        
+
         accelerator.init_trackers(
             project_name=config.wandb.project, 
             config=OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
         )
-        
+
         wandb_tracker = accelerator.get_tracker("wandb", unwrap=True)
         
-        peft_checkpoint_path = os.path.join(
-                                config.peft.checkpoint_root,
-                                f"{wandb_tracker.id}_{wandb_tracker.name}") 
+        if accelerator.is_main_process:
+            peft_checkpoint_path = os.path.join(
+                                    config.peft.checkpoint_root,
+                                    f"{wandb_tracker.id}_{wandb_tracker.name}") 
     else:
         accelerator = Accelerator()
-        if accelerator.is_main_process:
-            peft_checkpoint_path = os.path.join(config.peft.checkpoint_root, "TEST")
+        peft_checkpoint_path = os.path.join(config.peft.checkpoint_root, "TEST")
             
       
     if accelerator.is_main_process:
         os.makedirs(peft_checkpoint_path, exist_ok=True)
+        config.peft.checkpoint_path = peft_checkpoint_path
         
     return accelerator
     
@@ -146,7 +147,7 @@ def train_model(accelerator, model, optimizer, train_dataloader, config):
         optimizer.zero_grad()
         
         if accelerator.is_main_process:
-            epoch_saving_path = os.path.join(peft_checkpoint_path, f'epoch_{epoch}')
+            epoch_saving_path = os.path.join(config.peft.checkpoint_path, f'epoch_{epoch}')
             os.makedirs(epoch_saving_path, exist_ok=True)
             accelerator.unwrap_model(model).save_pretrained(epoch_saving_path)
     
