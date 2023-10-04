@@ -2,6 +2,7 @@ import os
 import pandas
 from tqdm import tqdm
 from PIL import Image
+import gc
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -47,6 +48,8 @@ class ImageCaptioningDataset(Dataset):
         encoding = {k: v.squeeze() for k, v in encoding.items()}
         encoding["prompt"] = caption
         
+        image.close()
+        
         return encoding
 
 
@@ -69,8 +72,8 @@ def make_collate_fn(processor):
 
 
 def build_model(pretrained, lora_config):
-    processor = AutoProcessor.from_pretrained(pretrained)
-    model = Blip2ForConditionalGeneration.from_pretrained(pretrained, device_map="cpu")#, device_map="auto"
+    processor = AutoProcessor.from_pretrained(pretrained, device_map="cpu")
+    model = Blip2ForConditionalGeneration.from_pretrained(pretrained, device_map="cpu")
 
     model = get_peft_model(model, lora_config)
     model.train()
@@ -142,9 +145,9 @@ def train_model(accelerator, model, optimizer, train_dataloader, config):
                 
             progress_bar.set_postfix({'loss': loss.item()})
         
-        accelerator.backward(loss)
-        optimizer.step()
-        optimizer.zero_grad()
+            accelerator.backward(loss)
+            optimizer.step()
+            optimizer.zero_grad()
         
         if accelerator.is_main_process:
             epoch_saving_path = os.path.join(config.peft.checkpoint_path, f'epoch_{epoch}')
