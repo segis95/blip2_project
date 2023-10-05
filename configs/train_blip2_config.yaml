@@ -35,6 +35,8 @@ training:
     learning_rate: 5.0e-5
     n_epochs: 10
     batch_size: 2
+    gradient_accumulation_steps: 8
+    dataloader_workers: 32
 
 # W&B params
 wandb:

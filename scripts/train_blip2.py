@@ -94,14 +94,16 @@ def make_dataloader(processor, config):
     train_dataloader = DataLoader(train_dataset,
                                   shuffle=True,
                                   batch_size=config.training.batch_size,
-                                  collate_fn=collate_fn)
+                                  collate_fn=collate_fn,
+                                  num_workers=config.training.dataloader_workers)
     
     return train_dataloader
 
 def make_accelerator(config):
     
     if config.wandb.enabled:
-        accelerator = Accelerator(log_with="wandb")
+        accelerator = Accelerator(log_with="wandb", 
+                    gradient_accumulation_steps=config.training.gradient_accumulation_steps)
 
         accelerator.init_trackers(
             project_name=config.wandb.project, 
@@ -115,7 +117,7 @@ def make_accelerator(config):
                                     config.peft.checkpoint_root,
                                     f"{wandb_tracker.id}_{wandb_tracker.name}") 
     else:
-        accelerator = Accelerator()
+        accelerator = Accelerator(gradient_accumulation_steps=config.training.gradient_accumulation_steps)
         peft_checkpoint_path = os.path.join(config.peft.checkpoint_root, "TEST")
             
       
@@ -133,28 +135,30 @@ def train_model(accelerator, model, optimizer, train_dataloader, config):
         progress_bar = tqdm(train_dataloader, desc="Training", leave=True,
                             disable=not accelerator.is_main_process)
         
-        for idx, x in enumerate(progress_bar):
-         
-            outputs = model(input_ids=x['input_ids'],
-                            pixel_values=x['pixel_values'],
-                            labels=x['input_ids'])
+        for idx, batch in enumerate(progress_bar):
             
-            loss = outputs.loss
-            if config.wandb.enabled:
-                accelerator.log({"loss": loss.item()})
-                
-            progress_bar.set_postfix({'loss': loss.item()})
-        
-            accelerator.backward(loss)
-            optimizer.step()
-            optimizer.zero_grad()
+            with accelerator.accumulate(model):
+                outputs = model(input_ids=batch['input_ids'],
+                            pixel_values=batch['pixel_values'],
+                            labels=batch['input_ids'])
+            
+                loss = outputs.loss
+                if config.wandb.enabled:
+                    accelerator.log({"loss": loss.item()})
+
+                progress_bar.set_postfix({'loss': loss.item()})
+
+                accelerator.backward(loss)
+                optimizer.step()
+                optimizer.zero_grad()
         
         if accelerator.is_main_process:
             epoch_saving_path = os.path.join(config.peft.checkpoint_path, f'epoch_{epoch}')
             os.makedirs(epoch_saving_path, exist_ok=True)
             accelerator.unwrap_model(model).save_pretrained(epoch_saving_path)
     
-    accelerator.end_training()
+    if config.wandb.enabled:
+        accelerator.end_training()
         
 @hydra.main(version_base=None, config_path="../configs", config_name="train_blip2_config")
 def main(cfg):
