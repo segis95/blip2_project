@@ -10,10 +10,13 @@ resulting_csv:
     directory: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/
     base_name: "BLIP2_INFERENCE_RESULTS.csv"
 
-# GPU id relative to CUDA_VISIBLE_DEVICES value
-gpu: 0
+dataloader:
+    batch_size_per_gpu: 2
+    n_workers: 4
 
-
+generation:
+    max_length: 100
+    
 wandb:
     enabled: True
     project: "BLIP2_PREDICT"
