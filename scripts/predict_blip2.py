@@ -59,7 +59,7 @@ def collate_fn(batch):
     
     processed_batch["image_path"] = []
     for example in batch:
-        processed_batch["image_path"].extend(example["image_path"])
+        processed_batch["image_path"].extend([example["image_path"]])
 
     return processed_batch
 
@@ -85,9 +85,10 @@ def load_model(config):
     return model, processor
 
 def make_csv_and_log(accelerator, paths, captions, config):
-    df = pd.DataFrame(columns=['paths', 'caption'])
+    df = pd.DataFrame(columns=["paths", "caption"])
     df.paths = paths
     df.caption = captions
+    df.drop_duplicates(subset="paths", inplace=True, ignore_index=True)
     
     wandb_tracker = accelerator.get_tracker("wandb", unwrap=True)
     csv_name = f"{wandb_tracker.id}_{wandb_tracker.name}_" if config.wandb.enabled else ""
@@ -107,7 +108,7 @@ def make_csv_and_log(accelerator, paths, captions, config):
         
         table = Table(data=table_data, columns=["generated_caption", "image"])
 
-        wandb_tracker.log_artifact(table)
+        wandb_tracker.log({'table': table})
                 
 @hydra.main(version_base=None, config_path="../configs", config_name="predict_blip2_config")
 def main(cfg):
@@ -137,7 +138,10 @@ def main(cfg):
         
         collected_paths.extend(batch["image_path"])
         collected_captions.extend(generated_captions)
-        
+    
+    collected_captions = accelerator.gather_for_metrics(collected_captions)
+    collected_paths = accelerator.gather_for_metrics(collected_paths)
+    
     if accelerator.is_main_process:
         make_csv_and_log(accelerator, collected_paths, collected_captions, cfg)
 

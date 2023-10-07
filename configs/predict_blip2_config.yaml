@@ -4,21 +4,22 @@ image_folders_list:
 
 base_model_checkpoint: "blip2-opt-2.7b"
 
-peft_checkpoint: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/peft_checkpoints/ppxy9wbw_peach-wood-23/epoch_2
+peft_checkpoint: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/peft_checkpoints/a13g4iie_dutiful-cloud-59/epoch_9
 
+# /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/peft_checkpoints/ppxy9wbw_peach-wood-23/epoch_2
 resulting_csv: 
     directory: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/
     base_name: "BLIP2_INFERENCE_RESULTS.csv"
 
 dataloader:
     batch_size_per_gpu: 2
-    n_workers: 4
+    n_workers: 16
 
 generation:
     max_length: 100
     
 wandb:
-    enabled: True
+    enabled: true
     project: "BLIP2_PREDICT"
     log_visual_examples: True
     n_logged_visual_examples: 60
