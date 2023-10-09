@@ -14,6 +14,21 @@ import hydra
 from omegaconf import OmegaConf
 
 
+def print_trainable_parameters(model):
+    """
+    Prints the number of trainable parameters in the model.
+    """
+    trainable_params = 0
+    all_param = 0
+    for _, param in model.named_parameters():
+        all_param += param.numel()
+        if param.requires_grad:
+            trainable_params += param.numel()
+    print(
+        f"trainable params: {trainable_params:,} || all params: {all_param:,} || trainable%: {100 * trainable_params / all_param}"
+    )
+
+    
 class ImageCaptioningDataset(Dataset):
     def __init__(self, images_root, csvs_list, processor, crop_box=None):
 
@@ -71,14 +86,29 @@ def make_collate_fn(processor):
     return collate_fn
 
 
-def build_model(pretrained, lora_config):
-    processor = AutoProcessor.from_pretrained(pretrained, device_map="cpu")
-    model = Blip2ForConditionalGeneration.from_pretrained(pretrained, device_map="cpu")
-
-    model = get_peft_model(model, lora_config)
+def build_model(config):
+    
+    processor = AutoProcessor.from_pretrained(config.model.pretrained_checkpoint, device_map="cpu")
+    model = Blip2ForConditionalGeneration.from_pretrained(config.model.pretrained_checkpoint, device_map="cpu")
+    
+    if config.peft.add_adapter:
+        
+        lora_config = LoraConfig(
+            r=config.peft.lora.r,
+            lora_alpha=config.peft.lora.lora_alpha,
+            lora_dropout=config.peft.lora.lora_dropout,
+            bias=config.peft.lora.bias,
+            target_modules=list(config.peft.lora.target_modules)
+        )
+        
+        model = get_peft_model(model, lora_config)
+        
     model.train()
     
-    model.print_trainable_parameters()
+    if config.peft.add_adapter: 
+        model.print_trainable_parameters()
+        
+    print_trainable_parameters(model)
     
     return model, processor
 
@@ -101,29 +131,32 @@ def make_dataloader(processor, config):
 
 def make_accelerator(config):
     
-    if config.wandb.enabled:
+    checkpoint_root = config.peft.checkpoint_root if config.peft.add_adapter else config.model.checkpoint_root
+                                                
+    
+    if config.logging.wandb.enabled:
         accelerator = Accelerator(log_with="wandb", 
                     gradient_accumulation_steps=config.training.gradient_accumulation_steps)
 
         accelerator.init_trackers(
-            project_name=config.wandb.project, 
+            project_name=config.logging.wandb.project, 
             config=OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
         )
-
+        
         wandb_tracker = accelerator.get_tracker("wandb", unwrap=True)
         
         if accelerator.is_main_process:
-            peft_checkpoint_path = os.path.join(
-                                    config.peft.checkpoint_root,
+            
+            checkpoint_path = os.path.join(
+                                    checkpoint_root,
                                     f"{wandb_tracker.id}_{wandb_tracker.name}") 
     else:
         accelerator = Accelerator(gradient_accumulation_steps=config.training.gradient_accumulation_steps)
-        peft_checkpoint_path = os.path.join(config.peft.checkpoint_root, "TEST")
+        checkpoint_path = os.path.join(checkpoint_root, "TEST")
             
-      
     if accelerator.is_main_process:
-        os.makedirs(peft_checkpoint_path, exist_ok=True)
-        config.peft.checkpoint_path = peft_checkpoint_path
+        os.makedirs(checkpoint_path, exist_ok=True)
+        config.logging.checkpoint_path = checkpoint_path
         
     return accelerator
     
@@ -143,7 +176,7 @@ def train_model(accelerator, model, optimizer, train_dataloader, config):
                             labels=batch['input_ids'])
             
                 loss = outputs.loss
-                if config.wandb.enabled:
+                if config.logging.wandb.enabled:
                     accelerator.log({"loss": loss.item()})
 
                 progress_bar.set_postfix({'loss': loss.item()})
@@ -152,38 +185,30 @@ def train_model(accelerator, model, optimizer, train_dataloader, config):
                 optimizer.step()
                 optimizer.zero_grad()
         
-        if accelerator.is_main_process:
-            epoch_saving_path = os.path.join(config.peft.checkpoint_path, f'epoch_{epoch}')
+        if accelerator.is_main_process and (epoch + 1) % config.logging.checkpoint_every_nth_epoch == 0:
+            epoch_saving_path = os.path.join(config.logging.checkpoint_path, f'epoch_{epoch}')
             os.makedirs(epoch_saving_path, exist_ok=True)
+            
             accelerator.unwrap_model(model).save_pretrained(epoch_saving_path)
+            if not config.peft.add_adapter:
+                train_dataloader.processor.save_pretrained(epoch_saving_path)
     
-    if config.wandb.enabled:
+    if config.logging.wandb.enabled:
         accelerator.end_training()
         
 @hydra.main(version_base=None, config_path="../configs", config_name="train_blip2_config")
-def main(cfg):
-    
-    lora_config = LoraConfig(
-        r=cfg.peft.lora.r,
-        lora_alpha=cfg.peft.lora.lora_alpha,
-        lora_dropout=cfg.peft.lora.lora_dropout,
-        bias=cfg.peft.lora.bias,
-        target_modules=list(cfg.peft.lora.target_modules)
-    )
-    
+def main(cfg):    
 
-    model, processor = build_model(pretrained=cfg.model.pretrained,
-                                  lora_config=lora_config
-                                  )
-    
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.training.learning_rate)
+    model, processor = build_model(config=cfg)
     
     train_dataloader = make_dataloader(processor=processor,
                                        config=cfg
                                      )
     
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.training.learning_rate)
     
     accelerator = make_accelerator(cfg)
+    
     model, optimizer, train_dataloader = accelerator.prepare(
         model, optimizer, train_dataloader
     )

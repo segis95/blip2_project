@@ -1,18 +1,19 @@
 image_folders_list:
-    - /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/images1_infer
-    - /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/images2_infer
+    - /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/data/toy_data/images1_infer
+    - /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/data/toy_data/images2_infer
 
-base_model_checkpoint: "blip2-opt-2.7b"
+checkpoint:
+    load_adapter: false
+    base_model_no_adapter: "blip2-opt-2.7b"
+    adapter: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/peft_checkpoints/a13g4iie_dutiful-cloud-59/epoch_9
+    base_model_with_adapter: "blip2-opt-2.7b"
 
-peft_checkpoint: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/peft_checkpoints/a13g4iie_dutiful-cloud-59/epoch_9
-
-# /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/peft_checkpoints/ppxy9wbw_peach-wood-23/epoch_2
 resulting_csv: 
-    directory: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/
+    directory: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/inference_results/
     base_name: "BLIP2_INFERENCE_RESULTS.csv"
 
 dataloader:
-    batch_size_per_gpu: 2
+    batch_size_per_gpu: 16
     n_workers: 16
 
 generation:

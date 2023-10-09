@@ -10,7 +10,6 @@ from wandb import Table
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoProcessor, Blip2ForConditionalGeneration
-from train_blip2 import ImageCaptioningDataset
 from accelerate import Accelerator
 
 
@@ -78,10 +77,20 @@ def make_accelerator(config):
     return accelerator
 
 def load_model(config):
-    processor = AutoProcessor.from_pretrained(config.base_model_checkpoint, device_map="cpu")
-    model = Blip2ForConditionalGeneration.from_pretrained(config.base_model_checkpoint, device_map="cpu")
-    model.load_adapter(config.peft_checkpoint)
     
+    processor = None
+    model = None
+    if config.checkpoint.load_adapter:
+        processor = AutoProcessor.from_pretrained(config.checkpoint.base_model_with_adapter, device_map="cpu")
+        model = Blip2ForConditionalGeneration.from_pretrained(config.checkpoint.base_model_with_adapter,
+                                                              device_map="cpu")
+        model.load_adapter(config.checkpoint.adapter)
+        
+    else:
+        processor = AutoProcessor.from_pretrained(config.checkpoint.base_model_no_adapter, device_map="cpu")
+        model = Blip2ForConditionalGeneration.from_pretrained(config.checkpoint.base_model_no_adapter,
+                                                              device_map="cpu")
+
     return model, processor
 
 def make_csv_and_log(accelerator, paths, captions, config):
@@ -124,7 +133,8 @@ def main(cfg):
                           collate_fn=collate_fn)
     
     model, dataloader = accelerator.prepare(model, dataloader)
-        
+    model = accelerator.unwrap_model(model)
+    
     collected_paths = []
     collected_captions = []
     
@@ -133,7 +143,8 @@ def main(cfg):
     
     for batch_id, batch in enumerate(progress_bar):
         
-        generated_ids = model.generate(pixel_values=batch["pixel_values"], max_length=cfg.generation.max_length)
+        generated_ids = model.generate(pixel_values=batch["pixel_values"],
+                                                                 max_length=cfg.generation.max_length)
         generated_captions = list(processor.batch_decode(generated_ids, skip_special_tokens=True))
         
         collected_paths.extend(batch["image_path"])
