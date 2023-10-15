@@ -4,9 +4,9 @@ image_folders_list:
 
 checkpoint:
     load_adapter: false
-    base_model_no_adapter: "blip2-opt-2.7b"
+    processor: "blip2-opt-2.7b"
+    base_model: "blip2-opt-2.7b"
     adapter: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/peft_checkpoints/a13g4iie_dutiful-cloud-59/epoch_9
-    base_model_with_adapter: "blip2-opt-2.7b"
 
 resulting_csv: 
     directory: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/inference_results/

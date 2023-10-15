@@ -16,33 +16,44 @@ csv_list:
 crop_box: [0, 0, 1024, 1024]
 
 
+# loads pretrained model and adds adapter if model.adapter.add_adapter is false,
+# otherwise loads whole model from models.adapter.checkpoint.
+# In both cases unfreezes various model's parts if required.
 model:
-    pretrained_checkpoint: "blip2-opt-2.7b"
-    checkpoint_root: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/base_model_checkpoints
+    processor: "blip2-opt-2.7b"
+    base_model:
+        checkpoint: "blip2-opt-2.7b"
+        unfreeze_language_model: false
+        unfreeze_vision_model: false
+        unfreeze_qformer: false
+    adapter:
+        add_adapter: false
+        # loads weights and config from checkpoint
+        load_from_checkpoint: false
+        checkpoint: 
+        lora_config:
+            r: 16
+            lora_alpha: 32
+            lora_dropout: 0.05
+            target_modules: ["q_proj", "k_proj"]
+            bias: "none"
 
-peft:
-    add_adapter: false
-    checkpoint_root: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/peft_checkpoints
-    lora:
-        r: 16
-        lora_alpha: 32
-        lora_dropout: 0.05
-        target_modules: ["q_proj", "k_proj"]
-        bias: "none"
 
-
-# training params
 training:
     learning_rate: 5.0e-5
     n_epochs: 10
     batch_size: 1
-    gradient_accumulation_steps: 8
+    gradient_accumulation_steps: 1
     dataloader_workers: 32
 
 
-# logging params
+# log_base_model=false used when base model is frozen to obtain lightweight checkpoints
 logging:
+    checkpoint_root: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/checkpoints
     checkpoint_path: # updated in code
+    
+    log_base_model: true
+    
     checkpoint_every_nth_epoch: 5
     wandb:
         enabled: false

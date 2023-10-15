@@ -9,7 +9,7 @@ from wandb import Table
 
 import torch
 from torch.utils.data import Dataset, DataLoader
-from transformers import AutoProcessor, Blip2ForConditionalGeneration
+from transformers import Blip2Processor, Blip2ForConditionalGeneration
 from accelerate import Accelerator
 
 
@@ -78,19 +78,13 @@ def make_accelerator(config):
 
 def load_model(config):
     
-    processor = None
-    model = None
+    processor = Blip2Processor.from_pretrained(config.checkpoint.processor, device_map="auto")
+    
+    model = Blip2ForConditionalGeneration.from_pretrained(config.checkpoint.base_model,
+                                                              device_map="auto")
     if config.checkpoint.load_adapter:
-        processor = AutoProcessor.from_pretrained(config.checkpoint.base_model_with_adapter, device_map="cpu")
-        model = Blip2ForConditionalGeneration.from_pretrained(config.checkpoint.base_model_with_adapter,
-                                                              device_map="cpu")
         model.load_adapter(config.checkpoint.adapter)
         
-    else:
-        processor = AutoProcessor.from_pretrained(config.checkpoint.base_model_no_adapter, device_map="cpu")
-        model = Blip2ForConditionalGeneration.from_pretrained(config.checkpoint.base_model_no_adapter,
-                                                              device_map="cpu")
-
     return model, processor
 
 def make_csv_and_log(accelerator, paths, captions, config):
