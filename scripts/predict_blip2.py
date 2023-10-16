@@ -114,16 +114,17 @@ def make_csv_and_log(accelerator, paths, captions, config):
         wandb_tracker.log({'table': table})
                 
 @hydra.main(version_base=None, config_path="../configs", config_name="predict_blip2_config")
-def main(cfg):
+def main(config):
     
-    accelerator = make_accelerator(cfg)
-    model, processor = load_model(cfg)
+    accelerator = make_accelerator(config)
     
-    dataset = ImagesDataset(cfg.image_folders_list, processor)
+    model, processor = load_model(config)
+    
+    dataset = ImagesDataset(config.image_folders_list, processor)
     
     dataloader = DataLoader(dataset,
-                          batch_size=cfg.dataloader.batch_size_per_gpu,
-                          num_workers=cfg.dataloader.n_workers,
+                          batch_size=config.dataloader.batch_size_per_gpu,
+                          num_workers=config.dataloader.n_workers,
                           collate_fn=collate_fn)
     
     model, dataloader = accelerator.prepare(model, dataloader)
@@ -138,7 +139,7 @@ def main(cfg):
     for batch_id, batch in enumerate(progress_bar):
         
         generated_ids = model.generate(pixel_values=batch["pixel_values"],
-                                                                 max_length=cfg.generation.max_length)
+                                                                 max_length=config.generation.max_length)
         generated_captions = list(processor.batch_decode(generated_ids, skip_special_tokens=True))
         
         collected_paths.extend(batch["image_path"])
@@ -148,18 +149,8 @@ def main(cfg):
     collected_paths = accelerator.gather_for_metrics(collected_paths)
     
     if accelerator.is_main_process:
-        make_csv_and_log(accelerator, collected_paths, collected_captions, cfg)
+        make_csv_and_log(accelerator, collected_paths, collected_captions, config)
 
 
 if __name__ == '__main__':
-    main()        
-    
-    
-    
-    
-        
-    
-        
-    
-        
-    
+    main()

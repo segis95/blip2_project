@@ -3,10 +3,10 @@ image_folders_list:
     - /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/data/toy_data/images2_infer
 
 checkpoint:
-    load_adapter: false
+    load_adapter: true
     processor: "blip2-opt-2.7b"
     base_model: "blip2-opt-2.7b"
-    adapter: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/peft_checkpoints/a13g4iie_dutiful-cloud-59/epoch_9
+    adapter: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/model_checkpoints/fw8l60hy_ancient-lake-63/epoch_9/adapter
 
 resulting_csv: 
     directory: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/inference_results/

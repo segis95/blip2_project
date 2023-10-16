@@ -13,7 +13,7 @@ from accelerate import Accelerator
 import hydra
 from omegaconf import OmegaConf
 
-from .utils import print_trainable_parameters
+from utils import print_trainable_parameters
 
 
 class ImageCaptioningDataset(Dataset):
@@ -24,11 +24,11 @@ class ImageCaptioningDataset(Dataset):
         for csv in csvs_list:
             df = pandas.read_csv(csv, index_col=0)
             assert all(c1 == c2 for c1, c2 in zip(df.columns, ['paths', 'caption']))
-            
+
             self.img_path_caption_pairs.extend(
                 [(os.path.join(images_root, p), c) for p, c in zip(df.paths,  df.caption)]
             )
-            
+ 
         self.processor = processor
 
     def __len__(self):
@@ -36,7 +36,7 @@ class ImageCaptioningDataset(Dataset):
 
     def __getitem__(self, idx):
         img_path, caption = self.img_path_caption_pairs[idx]
-        
+
         try:
             image = Image.open(img_path)
             
@@ -46,7 +46,7 @@ class ImageCaptioningDataset(Dataset):
         except Exception as exc:
             raise
         
-        encoding = self.processor(images=image, padding="max_length", return_tensors="pt")#.to(torch.float16)
+        encoding = self.processor(images=image, padding="max_length", return_tensors="pt")
         encoding = {k: v.squeeze() for k, v in encoding.items()}
         encoding["prompt"] = caption
         
@@ -83,6 +83,10 @@ def build_model(config):
     model = Blip2ForConditionalGeneration.from_pretrained(config.model.base_model.checkpoint,
                                                           device_map="auto"
                                                           )
+    # freeze model
+    for param in model.parameters():
+        param.requires_grad = False
+        
     if config.model.adapter.add_adapter:        
         if config.model.adapter.load_from_checkpoint:
             model = PeftModel.from_pretrained(model=model,
@@ -104,37 +108,35 @@ def build_model(config):
         unfreeze_params(model.language_model)
     
     if config.model.base_model.unfreeze_vision_model:
-        unfreeze_params(model.vision_model): 
+        unfreeze_params(model.vision_model)
     
     if config.model.base_model.unfreeze_qformer:
-        unfreeze_params(model.qformer): 
+        unfreeze_params(model.qformer)
+        
+    if config.model.base_model.unfreeze_language_projection:
+        unfreeze_params(model.language_projection)
     
     model.train()
     
-    if config.model.adapter.add_adapter: 
+    if config.model.adapter.add_adapter:
+        print("\nAdapter's native output")
         model.print_trainable_parameters()
+        print('\n')
     
-    print("Total Model Params")
-    print_trainable_parameters(model)
-
-    print("Language Model Params")
-    print_trainable_parameters(model.language_model)
-    
-    print("Vision Model Params")
-    print_trainable_parameters(model.vision_model)
-    
-    print("QFormer Params")
-    print_trainable_parameters(model.qformer)
-    
+    print("Total Model Params\n", print_trainable_parameters(model), '\n')
+    print("Language Model Params\n", print_trainable_parameters(model.language_model), '\n')
+    print("Vision Model Params\n", print_trainable_parameters(model.vision_model), '\n')
+    print("QFormer Params\n", print_trainable_parameters(model.qformer), '\n')
+    print("Language Projection Params\n", print_trainable_parameters(model.language_projection), '\n')
 
     return model, processor
 
 def make_dataloader(processor, config):
     
-    train_dataset = ImageCaptioningDataset(images_root=config.data_path,
-                                           csvs_list=config.csv_list,
+    train_dataset = ImageCaptioningDataset(images_root=config.data.path,
+                                           csvs_list=config.data.csv_list,
                                            processor=processor,
-                                           crop_box=tuple(config.crop_box))
+                                           crop_box=tuple(config.data.crop_box))
     
     collate_fn = make_collate_fn(processor)
     train_dataloader = DataLoader(train_dataset,
@@ -147,9 +149,8 @@ def make_dataloader(processor, config):
 
 def make_accelerator(config):
     
-    checkpoint_root = config.peft.checkpoint_root if config.peft.add_adapter else config.model.checkpoint_root
+    checkpoint_root = config.logging.checkpoint_root
                                                 
-    
     if config.logging.wandb.enabled:
         accelerator = Accelerator(log_with="wandb", 
                     gradient_accumulation_steps=config.training.gradient_accumulation_steps)
@@ -177,8 +178,10 @@ def make_accelerator(config):
     return accelerator
 
 def make_epoch_checkpoint(model, epoch, accelerator, config):
-    
+        
     if accelerator.is_main_process and (epoch + 1) % config.logging.checkpoint_every_nth_epoch == 0:
+        if not os.path.exists(config.logging.checkpoint_path):
+            os.makedirs(config.logging.checkpoint_path)
         
         epoch_saving_path = os.path.join(config.logging.checkpoint_path, f'epoch_{epoch}')
         os.makedirs(epoch_saving_path, exist_ok=True)
@@ -234,7 +237,9 @@ def train_model(accelerator, model, optimizer, train_dataloader, config):
 
 @hydra.main(version_base=None, config_path="../configs", config_name="train_blip2_config")
 def main(config):    
-
+    
+    accelerator = make_accelerator(config)
+    
     model, processor = build_model(config=config) 
 
     train_dataloader = make_dataloader(processor=processor,
@@ -243,7 +248,6 @@ def main(config):
     
     optimizer = torch.optim.Adam(model.parameters(), lr=config.training.learning_rate)
     
-    accelerator = make_accelerator(config)
     
     model, optimizer, train_dataloader = accelerator.prepare(
         model, optimizer, train_dataloader
