@@ -1,20 +1,26 @@
 image_folders_list:
-    - /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/images1_infer
-    - /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/images2_infer
+    - /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/data/toy_data/images1_infer
+    - /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/data/toy_data/images2_infer
 
-base_model_checkpoint: "blip2-opt-2.7b"
-
-peft_checkpoint: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/peft_checkpoints/ppxy9wbw_peach-wood-23/epoch_2
+checkpoint:
+    load_adapter: true
+    processor: "blip2-opt-2.7b"
+    base_model: "blip2-opt-2.7b"
+    adapter: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/model_checkpoints/fw8l60hy_ancient-lake-63/epoch_9/adapter
 
 resulting_csv: 
-    directory: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/
+    directory: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/inference_results/
     base_name: "BLIP2_INFERENCE_RESULTS.csv"
 
-# GPU id relative to CUDA_VISIBLE_DEVICES value
-gpu: 0
+dataloader:
+    batch_size_per_gpu: 16
+    n_workers: 16
 
+generation:
+    max_length: 100
+    
 wandb:
-    enabled: True
+    enabled: true
     project: "BLIP2_PREDICT"
     log_visual_examples: True
     n_logged_visual_examples: 60

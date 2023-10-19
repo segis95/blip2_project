@@ -2,14 +2,18 @@ import os
 import pandas
 from tqdm import tqdm
 from PIL import Image
+import gc
 
 import torch
 from torch.utils.data import Dataset, DataLoader
-from transformers import AutoProcessor, Blip2ForConditionalGeneration
-from peft import LoraConfig, get_peft_model
+from transformers import Blip2Processor, Blip2ForConditionalGeneration
+from peft import LoraConfig, get_peft_model, PeftModel
+from accelerate import Accelerator
 
 import hydra
 from omegaconf import OmegaConf
+
+from utils import print_trainable_parameters
 
 
 class ImageCaptioningDataset(Dataset):
@@ -20,11 +24,11 @@ class ImageCaptioningDataset(Dataset):
         for csv in csvs_list:
             df = pandas.read_csv(csv, index_col=0)
             assert all(c1 == c2 for c1, c2 in zip(df.columns, ['paths', 'caption']))
-            
+
             self.img_path_caption_pairs.extend(
                 [(os.path.join(images_root, p), c) for p, c in zip(df.paths,  df.caption)]
             )
-            
+ 
         self.processor = processor
 
     def __len__(self):
@@ -32,7 +36,7 @@ class ImageCaptioningDataset(Dataset):
 
     def __getitem__(self, idx):
         img_path, caption = self.img_path_caption_pairs[idx]
-        
+
         try:
             image = Image.open(img_path)
             
@@ -46,8 +50,9 @@ class ImageCaptioningDataset(Dataset):
         encoding = {k: v.squeeze() for k, v in encoding.items()}
         encoding["prompt"] = caption
         
+        image.close()
+        
         return encoding
-
 
 def make_collate_fn(processor):
     def collate_fn(batch):
@@ -66,100 +71,193 @@ def make_collate_fn(processor):
 
     return collate_fn
 
+def unfreeze_params(model):
+    for param in model.parameters():
+        param.requires_grad = True
 
-def build_model(pretrained, lora_config):
-    processor = AutoProcessor.from_pretrained(pretrained)
-    model = Blip2ForConditionalGeneration.from_pretrained(pretrained, device_map="auto")
-
-    model = get_peft_model(model, lora_config)
-    model.print_trainable_parameters()
+def build_model(config):
     
-    return model, processor
+    processor = Blip2Processor.from_pretrained(config.model.processor, 
+                                              device_map="auto")    
+    
+    model = Blip2ForConditionalGeneration.from_pretrained(config.model.base_model.checkpoint,
+                                                          device_map="auto"
+                                                          )
+    # freeze model
+    for param in model.parameters():
+        param.requires_grad = False
+        
+    if config.model.adapter.add_adapter:        
+        if config.model.adapter.load_from_checkpoint:
+            model = PeftModel.from_pretrained(model=model,
+                                             model_id=config.model.adapter.checkpoint,
+                                             is_trainable=True
+                                             )
+        else:
+            lora_config = LoraConfig(
+                r=config.model.adapter.lora_config.r,
+                lora_alpha=config.model.adapter.lora_config.lora_alpha,
+                lora_dropout=config.model.adapter.lora_config.lora_dropout,
+                bias=config.model.adapter.lora_config.bias,
+                target_modules=list(config.model.adapter.lora_config.target_modules)
+            )
+            
+            model = get_peft_model(model, lora_config)
+    
+    if config.model.base_model.unfreeze_language_model:
+        unfreeze_params(model.language_model)
+    
+    if config.model.base_model.unfreeze_vision_model:
+        unfreeze_params(model.vision_model)
+    
+    if config.model.base_model.unfreeze_qformer:
+        unfreeze_params(model.qformer)
+        
+    if config.model.base_model.unfreeze_language_projection:
+        unfreeze_params(model.language_projection)
+    
+    model.train()
+    
+    if config.model.adapter.add_adapter:
+        print("\nAdapter's native output")
+        model.print_trainable_parameters()
+        print('\n')
+    
+    print("Total Model Params\n", print_trainable_parameters(model), '\n')
+    print("Language Model Params\n", print_trainable_parameters(model.language_model), '\n')
+    print("Vision Model Params\n", print_trainable_parameters(model.vision_model), '\n')
+    print("QFormer Params\n", print_trainable_parameters(model.qformer), '\n')
+    print("Language Projection Params\n", print_trainable_parameters(model.language_projection), '\n')
 
+    return model, processor
 
 def make_dataloader(processor, config):
     
-    train_dataset = ImageCaptioningDataset(images_root=config.data_path,
-                                           csvs_list=config.csv_list,
+    train_dataset = ImageCaptioningDataset(images_root=config.data.path,
+                                           csvs_list=config.data.csv_list,
                                            processor=processor,
-                                           crop_box=tuple(config.crop_box))
+                                           crop_box=tuple(config.data.crop_box))
     
     collate_fn = make_collate_fn(processor)
     train_dataloader = DataLoader(train_dataset,
                                   shuffle=True,
                                   batch_size=config.training.batch_size,
-                                  collate_fn=collate_fn)
+                                  collate_fn=collate_fn,
+                                  num_workers=config.training.dataloader_workers)
     
     return train_dataloader
 
+def make_accelerator(config):
+    
+    checkpoint_root = config.logging.checkpoint_root
+                                                
+    if config.logging.wandb.enabled:
+        accelerator = Accelerator(log_with="wandb", 
+                    gradient_accumulation_steps=config.training.gradient_accumulation_steps)
 
-def train_model(model, train_dataloader, config):
+        accelerator.init_trackers(
+            project_name=config.logging.wandb.project, 
+            config=OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
+        )
+        
+        wandb_tracker = accelerator.get_tracker("wandb", unwrap=True)
+        
+        if accelerator.is_main_process:
+            
+            checkpoint_path = os.path.join(
+                                    checkpoint_root,
+                                    f"{wandb_tracker.id}_{wandb_tracker.name}") 
+    else:
+        accelerator = Accelerator(gradient_accumulation_steps=config.training.gradient_accumulation_steps)
+        checkpoint_path = os.path.join(checkpoint_root, "TEST")
+            
+    if accelerator.is_main_process:
+        os.makedirs(checkpoint_path, exist_ok=True)
+        config.logging.checkpoint_path = checkpoint_path
+        
+    return accelerator
+
+def make_epoch_checkpoint(model, epoch, accelerator, config):
+        
+    if accelerator.is_main_process and (epoch + 1) % config.logging.checkpoint_every_nth_epoch == 0:
+        if not os.path.exists(config.logging.checkpoint_path):
+            os.makedirs(config.logging.checkpoint_path)
+        
+        epoch_saving_path = os.path.join(config.logging.checkpoint_path, f'epoch_{epoch}')
+        os.makedirs(epoch_saving_path, exist_ok=True)
+        
+        # log base model if required
+        if config.logging.log_base_model:
+            epoch_saving_path_base = os.path.join(epoch_saving_path, "base_model")
+            os.makedirs(epoch_saving_path_base, exist_ok=True)
+            
+            if config.model.adapter.add_adapter:
+                accelerator.unwrap_model(model).base_model.save_pretrained(epoch_saving_path_base)
+            else:
+                accelerator.unwrap_model(model).save_pretrained(epoch_saving_path_base)
+        
+        # log adapter
+        if config.model.adapter.add_adapter:
+            epoch_saving_path_adapter = os.path.join(epoch_saving_path, "adapter")
+            os.makedirs(epoch_saving_path_adapter, exist_ok=True)
+            
+            accelerator.unwrap_model(model).save_pretrained(epoch_saving_path_adapter)
+
+def train_model(accelerator, model, optimizer, train_dataloader, config):
+
+    for epoch in range(config.training.n_epochs):
+
+        progress_bar = tqdm(train_dataloader, desc="Training", leave=True,
+                            disable=not accelerator.is_main_process)
+        
+        for idx, batch in enumerate(progress_bar):
+            
+            with accelerator.accumulate(model):
+                
+                outputs = model(input_ids=batch['input_ids'],
+                            pixel_values=batch['pixel_values'],
+                            labels=batch['input_ids'])
+                
+                loss = outputs.loss
+                
+                if config.logging.wandb.enabled:
+                    accelerator.log({"loss": loss.item()})
+
+                progress_bar.set_postfix({'loss': loss.item()})
+
+                accelerator.backward(loss)
+                optimizer.step()
+                optimizer.zero_grad()
+        
+        make_epoch_checkpoint(model, epoch, accelerator, config)
+
+    
+    if config.logging.wandb.enabled:
+        accelerator.end_training()
+
+@hydra.main(version_base=None, config_path="../configs", config_name="train_blip2_config")
+def main(config):    
+    
+    accelerator = make_accelerator(config)
+    
+    model, processor = build_model(config=config) 
+
+    train_dataloader = make_dataloader(processor=processor,
+                                       config=config
+                                     )
     
     optimizer = torch.optim.Adam(model.parameters(), lr=config.training.learning_rate)
     
-    model.train()
     
-    peft_checkpoint_path = os.path.join(config.peft.checkpoint_root, f"{wandb.run.id}_{wandb.run.name}")
-    os.mkdir(peft_checkpoint_path)
-    
-    device = f"cuda:{config.gpu}"
-    for epoch in range(config.training.n_epochs):
-        print("Epoch:", epoch)
-        progress_bar = tqdm(train_dataloader, desc="Training", leave=True)
-        for idx, x in enumerate(progress_bar):
-         
-            outputs = model(input_ids=x['input_ids'].to(device),
-                            pixel_values=x['pixel_values'].to(device),
-                            labels=x['input_ids'].to(device))
-            
-            loss = outputs.loss
-            if config.wandb.enabled:
-                wandb.log({"loss": loss.item()})
-                
-            progress_bar.set_postfix({'loss': loss.item()})
-        
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-        
-        epoch_saving_path = os.path.join(peft_checkpoint_path, f'epoch_{epoch}')
-        os.mkdir(epoch_saving_path)
-        model.save_pretrained(epoch_saving_path)
-
-        
-@hydra.main(version_base=None, config_path="../configs", config_name="train_blip2_config")
-def main(cfg):
-    
-    if cfg.wandb.enabled:
-        import wandb
-        wandb.config = OmegaConf.to_container(
-            cfg, resolve=True, throw_on_missing=True
-        )
-        
-        wandb.init(project=cfg.wandb.project)
-
-        
-    lora_config = LoraConfig(
-        r=cfg.peft.lora.r,
-        lora_alpha=cfg.peft.lora.lora_alpha,
-        lora_dropout=cfg.peft.lora.lora_dropout,
-        bias=cfg.peft.lora.bias,
-        target_modules=list(cfg.peft.lora.target_modules)
+    model, optimizer, train_dataloader = accelerator.prepare(
+        model, optimizer, train_dataloader
     )
     
-    with torch.device.cuda(cfg.gpu):
-        model, processor = build_model(pretrained=cfg.model.pretrained,
-                                      lora_config=lora_config
-                                      )
-    
-    
-    train_dataloader = make_dataloader(processor=processor,
-                                       config=cfg
-                                     )
-    
-    train_model(model=model,
+    train_model(accelerator=accelerator,
+               model=model,
+               optimizer=optimizer,
                train_dataloader=train_dataloader,
-               config=cfg
+               config=config
                )
 
 
