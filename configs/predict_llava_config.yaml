@@ -1,0 +1,31 @@
+image_folders_list:
+    # - /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/data/sbs/images
+    - /app/alexw/Experements/Imaginova/DataPreparation/2сh_pron
+    # - /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/data/toy_data/images2_infer
+
+checkpoint:
+    base_model: "llava-v1.5-13b"
+    # "llava-v1.5-7b"
+    
+resulting_csv: 
+    directory: /app/alexw/Experements/Imaginova/sergey_blip_dataset_creation/inference_results/llava_13b_full_dataset
+    base_name: "_LLAVA_13b.csv"
+
+dataloader:
+    batch_size_per_gpu: 1
+    n_workers: 16
+
+generation:
+    conversation_mode: "llava_v1"
+    prompt: "Provide a brief description of the image. Describe style, environment, objects, persons or animals in the image. Do not speculate, provide only clearly visible details."
+    temperature: 0.2
+    top_p:
+    num_beams: 1
+    max_new_tokens: 1024
+    
+wandb:
+    enabled: false
+    project: "LLAVA-1.5_PREDICT"
+    log_visual_examples: True
+    n_logged_visual_examples: 100
+    img_loging_shape: [128, 128]
